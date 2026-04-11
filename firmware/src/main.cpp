@@ -171,7 +171,7 @@ void setup() {
 
     // Initialize servo communication
     USB_SERIAL.println("\n🔧 Initializing servo communication...");
-    SERVO_SERIAL.begin(1000000, SERIAL_8N1, 17, 18);  // TX=17, RX=18
+    SERVO_SERIAL.begin(1000000, SERIAL_8N1, 18, 17);  // RX=18, TX=17
     servoController.begin(SERVO_SERIAL);  // No direction control - Waveshare adapter handles it
 
     delay(1000);
@@ -393,6 +393,14 @@ void centerAllServos(Stream& output) {
     output.println("🎯 Centering all servos to position 2048...");
 
     for (int i = 0; i < servoCount; i++) {
+        output.printf("Enabling torque for servo %d... ", detectedServos[i].id);
+        if (servoController.setTorqueEnable(detectedServos[i].id, true)) {
+            output.println("✅");
+        } else {
+            output.println("❌");
+        }
+        delay(200);
+
         output.printf("Centering servo %d... ", detectedServos[i].id);
         if (servoController.setPosition(detectedServos[i].id, 2048, 1000)) {
             output.println("✅");
