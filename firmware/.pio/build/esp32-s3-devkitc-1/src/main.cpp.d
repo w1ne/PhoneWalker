@@ -178,31 +178,4 @@
  /home/andrii/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/spi_flash/include/esp_spi_flash_counters.h \
  /home/andrii/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/esp_hw_support/include/soc/esp32/spiram.h \
  /home/andrii/.platformio/packages/framework-arduinoespressif32/cores/esp32/io_pin_remap.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/cores/esp32/Arduino.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFi.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/cores/esp32/Print.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/cores/esp32/IPv6Address.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiType.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiSTA.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiGeneric.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/esp_wifi/include/esp_smartconfig.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/wifi_provisioning/include/wifi_provisioning/manager.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/protocomm/include/common/protocomm.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/protocomm/include/security/protocomm_security.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/wifi_provisioning/include/wifi_provisioning/wifi_config.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiAP.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiScan.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiClient.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/cores/esp32/Client.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiServer.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/cores/esp32/Server.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiUdp.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/cores/esp32/Udp.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/cores/esp32/cbuf.h \
- .pio/libdeps/esp32-s3-devkitc-1/ArduinoJson/src/ArduinoJson.h \
- .pio/libdeps/esp32-s3-devkitc-1/ArduinoJson/src/ArduinoJson.hpp \
- .pio/libdeps/esp32-s3-devkitc-1/ArduinoJson/src/ArduinoJson/Configuration.hpp \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src/Wire.h \
- /home/andrii/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal.h \
- .pio/libdeps/esp32-s3-devkitc-1/Adafruit\ NeoPixel/Adafruit_NeoPixel.h \
- lib/STS3032/STS3032.h
+ /home/andrii/.platformio/packages/framework-arduinoespressif32/cores/esp32/Arduino.h
