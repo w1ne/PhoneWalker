@@ -1,410 +1,577 @@
 #include <Arduino.h>
+#include <WiFi.h>
+#include <ArduinoJson.h>
+#include <Wire.h>
 #include "STS3032.h"
 
-// Hardware configuration
-#define SERVO_SERIAL    Serial2  // ESP32 Hardware Serial 2 (pins 16, 17)
-#define SERVO_DIR_PIN   4        // Direction control pin for half-duplex communication
+// Function prototypes
+void initIMU();
+void readIMU();
+void discoverServos();
+void updateServoPositions();
+void processCommand(String command, Stream& output);
+void showStatus(Stream& output);
+void centerAllServos(Stream& output);
+void startWalking(int steps, Stream& output);
+void performWalkStep();
+void stopWalking(Stream& output);
+void sendPositionUpdate();
+void showRealTimeMonitor(Stream& output);
+void enterCalibrationMode(Stream& output);
+void parseAndMove(String command, Stream& output);
+void enableJsonMode(Stream& output);
+void showIMUData(Stream& output);
+void showBalanceStatus(Stream& output);
+
+// MPU6050 (GY-521) registers
+#define MPU6050_ADDR         0x68
+#define MPU6050_PWR_MGMT_1   0x6B
+#define MPU6050_ACCEL_XOUT_H 0x3B
+#define MPU6050_GYRO_XOUT_H  0x43
+
+struct IMUData {
+    float accelX, accelY, accelZ;
+    float gyroX, gyroY, gyroZ;
+    float pitch, roll, yaw;
+    float temperature;
+    bool isConnected;
+};
+
+// Hardware configuration for ESP32-S3
+#define SERVO_SERIAL    Serial1  // Hardware Serial 1 (GPIO 17, 18)
+#define SERVO_DIR_PIN   4        // Direction control pin for half-duplex
 #define USB_SERIAL      Serial   // USB Serial for commands
+#define LED_PIN         2        // Built-in LED
+
+// IMU GY-521 (MPU6050) configuration
+#define IMU_SDA_PIN     8        // I2C Data
+#define IMU_SCL_PIN     9        // I2C Clock
 
 // Servo controller and leg controller
 STS3032 servoController;
 PhoneWalkerLegs legs(&servoController);
 
-// Servo IDs for the 4-legged walker (using first 4 of your 15 servos)
-const uint8_t FRONT_LEFT_ID = 1;
-const uint8_t FRONT_RIGHT_ID = 2;
-const uint8_t BACK_LEFT_ID = 3;
-const uint8_t BACK_RIGHT_ID = 4;
+// Servo mapping and calibration
+struct ServoInfo {
+    uint8_t id;
+    String name;
+    int16_t currentPosition;
+    int16_t calibratedCenter;
+    int16_t minPosition;
+    int16_t maxPosition;
+    bool isResponding;
+    unsigned long lastUpdate;
+};
 
-// Command parsing variables
-String inputString = "";
-bool stringComplete = false;
+ServoInfo detectedServos[16];
+int servoCount = 0;
+bool calibrationMode = false;
+bool walkingActive = false;
+
+// IMU data
+IMUData imuData;
+
+// JSON for communication
+JsonDocument jsonDoc;
 
 void setup() {
-    // Initialize USB serial for commands
+    // Initialize LED
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, HIGH);
+
+    // Initialize USB serial
     USB_SERIAL.begin(115200);
-    while (!USB_SERIAL && millis() < 3000) {
-        delay(10);
-    }
+    delay(2000);
 
-    USB_SERIAL.println("PhoneWalker Servo Controller v1.0");
-    USB_SERIAL.println("==================================");
+    USB_SERIAL.println("🤖 PhoneWalker ESP32-S3 Controller v2.0");
+    USB_SERIAL.println("=========================================");
+    USB_SERIAL.println("Features:");
+    USB_SERIAL.println("- Real-time servo position monitoring");
+    USB_SERIAL.println("- Servo calibration and enumeration");
+    USB_SERIAL.println("- Walking simulation with feedback");
 
-    // Initialize servo serial communication
-    SERVO_SERIAL.begin(1000000);  // 1Mbps - standard for STS3032
+    // Initialize I2C for IMU (GY-521 on pins 8,9)
+    USB_SERIAL.println("\n🔧 Initializing IMU (GY-521)...");
+    Wire.begin(IMU_SDA_PIN, IMU_SCL_PIN);
+    Wire.setClock(400000);  // 400kHz I2C speed
+    initIMU();
+
+    // Initialize servo communication (proven working protocol)
+    USB_SERIAL.println("\n🔧 Initializing servo communication...");
+    SERVO_SERIAL.begin(1000000, SERIAL_8N1, 17, 18);  // TX=17, RX=18 for ESP32-S3
     servoController.begin(SERVO_SERIAL, SERVO_DIR_PIN);
-
-    // Initialize leg controller
-    legs.init(FRONT_LEFT_ID, FRONT_RIGHT_ID, BACK_LEFT_ID, BACK_RIGHT_ID);
-    legs.setNeutralPosition(2048);  // Center position
-    legs.setGaitParameters(200, 150);  // Lift height and step length
 
     delay(1000);
 
-    // Scan for connected servos
-    USB_SERIAL.println("Scanning for servos...");
-    uint8_t foundServos[16];
-    bool found = servoController.scanServos(foundServos, 16);
+    // Auto-discover and enumerate servos
+    discoverServos();
 
-    if (found) {
-        USB_SERIAL.print("Found servos with IDs: ");
-        for (int i = 0; i < 16; i++) {
-            if (foundServos[i] != 0) {
-                USB_SERIAL.print(foundServos[i]);
-                USB_SERIAL.print(" ");
-            }
-        }
-        USB_SERIAL.println();
+    // Initialize leg controller with discovered servos
+    if (servoCount >= 4) {
+        legs.init(detectedServos[0].id, detectedServos[1].id,
+                  detectedServos[2].id, detectedServos[3].id);
+        USB_SERIAL.println("✅ PhoneWalker ready with " + String(servoCount) + " servos!");
     } else {
-        USB_SERIAL.println("No servos found! Check connections and power.");
+        USB_SERIAL.println("⚠️ Need at least 4 servos for walking, but can test with " + String(servoCount));
     }
 
-    USB_SERIAL.println("\nCommands:");
-    USB_SERIAL.println("  scan - Scan for servos");
-    USB_SERIAL.println("  ping <id> - Ping servo");
-    USB_SERIAL.println("  pos <id> <position> [time] [speed] - Set servo position");
-    USB_SERIAL.println("  get <id> - Get servo position");
-    USB_SERIAL.println("  enable <id> - Enable servo torque");
-    USB_SERIAL.println("  disable <id> - Disable servo torque");
-    USB_SERIAL.println("  standup - Stand up robot");
-    USB_SERIAL.println("  sitdown - Sit down robot");
-    USB_SERIAL.println("  walk <steps> - Walk forward");
-    USB_SERIAL.println("  stop - Stop all movement");
-    USB_SERIAL.println("  test - Test individual servo movements");
-    USB_SERIAL.println("  status - Get servo status");
-    USB_SERIAL.println();
-    USB_SERIAL.println("Ready for commands:");
+    USB_SERIAL.println("\n📋 Commands:");
+    USB_SERIAL.println("  scan         - Discover servos");
+    USB_SERIAL.println("  status       - Show servo status");
+    USB_SERIAL.println("  calibrate    - Enter calibration mode");
+    USB_SERIAL.println("  center       - Move all servos to center");
+    USB_SERIAL.println("  walk <steps> - Simulate walking");
+    USB_SERIAL.println("  monitor      - Real-time position monitoring");
+    USB_SERIAL.println("  imu          - Show IMU data");
+    USB_SERIAL.println("  balance      - Show balance status");
+    USB_SERIAL.println("  json         - JSON API mode");
+    USB_SERIAL.println("\nReady for commands:");
+
+    digitalWrite(LED_PIN, LOW);  // Ready indicator
 }
 
 void loop() {
-    // Handle serial input
-    while (USB_SERIAL.available()) {
-        char inChar = (char)USB_SERIAL.read();
-        inputString += inChar;
+    // Handle USB commands
+    if (USB_SERIAL.available()) {
+        String command = USB_SERIAL.readStringUntil('\n');
+        command.trim();
+        processCommand(command, USB_SERIAL);
+    }
 
-        if (inChar == '\n') {
-            stringComplete = true;
+    // Real-time position monitoring
+    static unsigned long lastMonitor = 0;
+    if (millis() - lastMonitor > 500) {  // Monitor every 500ms
+        updateServoPositions();
+        lastMonitor = millis();
+    }
+
+    // Real-time IMU monitoring
+    static unsigned long lastIMU = 0;
+    if (millis() - lastIMU > 100) {  // Read IMU every 100ms
+        readIMU();
+        lastIMU = millis();
+    }
+
+    // Walking simulation
+    if (walkingActive) {
+        static unsigned long lastWalkStep = 0;
+        if (millis() - lastWalkStep > 2000) {  // Step every 2 seconds
+            performWalkStep();
+            lastWalkStep = millis();
         }
     }
 
-    // Process complete commands
-    if (stringComplete) {
-        inputString.trim();
-        processCommand(inputString);
-        inputString = "";
-        stringComplete = false;
-        USB_SERIAL.println("\nReady for commands:");
+    // LED status indicator
+    static unsigned long lastBlink = 0;
+    if (millis() - lastBlink > 1000) {
+        digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+        lastBlink = millis();
+    }
+
+    // Live status updates every 5 seconds
+    static unsigned long lastStatus = 0;
+    if (millis() - lastStatus > 5000) {
+        USB_SERIAL.printf("[%lu] PhoneWalker alive - %d servos, IMU:%s, Free heap: %d\n",
+                         millis(), servoCount, imuData.isConnected ? "OK" : "ERR", ESP.getFreeHeap());
+        lastStatus = millis();
     }
 
     delay(10);
 }
 
-void processCommand(String command) {
+void discoverServos() {
+    USB_SERIAL.println("🔍 Discovering servos (IDs 1-15)...");
+    servoCount = 0;
+
+    for (uint8_t id = 1; id <= 15; id++) {
+        USB_SERIAL.print("Testing ID " + String(id) + "... ");
+
+        if (servoController.ping(id)) {
+            detectedServos[servoCount].id = id;
+            detectedServos[servoCount].name = "Servo_" + String(id);
+            detectedServos[servoCount].isResponding = true;
+            detectedServos[servoCount].calibratedCenter = 2048;  // Default center
+            detectedServos[servoCount].minPosition = 0;
+            detectedServos[servoCount].maxPosition = 4095;
+            detectedServos[servoCount].lastUpdate = millis();
+
+            // Read initial position
+            int16_t pos = servoController.getPosition(id);
+            detectedServos[servoCount].currentPosition = (pos >= 0) ? pos : 2048;
+
+            USB_SERIAL.println("FOUND ✅ (Position: " + String(detectedServos[servoCount].currentPosition) + ")");
+            servoCount++;
+        } else {
+            USB_SERIAL.println("❌");
+        }
+        delay(100);
+    }
+
+    USB_SERIAL.println("\n📊 Discovery Summary:");
+    USB_SERIAL.println("Found " + String(servoCount) + " servos:");
+    for (int i = 0; i < servoCount; i++) {
+        USB_SERIAL.println("  " + detectedServos[i].name + " (ID: " + String(detectedServos[i].id) +
+                          ") - Position: " + String(detectedServos[i].currentPosition));
+    }
+}
+
+void updateServoPositions() {
+    for (int i = 0; i < servoCount; i++) {
+        int16_t pos = servoController.getPosition(detectedServos[i].id);
+        if (pos >= 0) {
+            detectedServos[i].currentPosition = pos;
+            detectedServos[i].lastUpdate = millis();
+            detectedServos[i].isResponding = true;
+        } else {
+            detectedServos[i].isResponding = false;
+        }
+    }
+}
+
+void processCommand(String command, Stream& output) {
     command.toLowerCase();
 
-    if (command.startsWith("scan")) {
-        scanServos();
+    if (command == "scan") {
+        discoverServos();
     }
-    else if (command.startsWith("ping ")) {
-        int id = command.substring(5).toInt();
-        pingServo(id);
+    else if (command == "status") {
+        showStatus(output);
     }
-    else if (command.startsWith("pos ")) {
-        parsePositionCommand(command);
+    else if (command == "calibrate") {
+        enterCalibrationMode(output);
     }
-    else if (command.startsWith("get ")) {
-        int id = command.substring(4).toInt();
-        getServoPosition(id);
-    }
-    else if (command.startsWith("enable ")) {
-        int id = command.substring(7).toInt();
-        enableServo(id, true);
-    }
-    else if (command.startsWith("disable ")) {
-        int id = command.substring(8).toInt();
-        enableServo(id, false);
-    }
-    else if (command == "standup") {
-        standUp();
-    }
-    else if (command == "sitdown") {
-        sitDown();
+    else if (command == "center") {
+        centerAllServos(output);
     }
     else if (command.startsWith("walk ")) {
         int steps = command.substring(5).toInt();
-        walkForward(steps);
+        startWalking(steps, output);
     }
     else if (command == "stop") {
-        stopMovement();
+        stopWalking(output);
     }
-    else if (command == "test") {
-        testServos();
+    else if (command == "monitor") {
+        showRealTimeMonitor(output);
     }
-    else if (command == "status") {
-        showServoStatus();
+    else if (command == "imu") {
+        showIMUData(output);
     }
-    else if (command == "help") {
-        showHelp();
+    else if (command == "balance") {
+        showBalanceStatus(output);
+    }
+    else if (command == "json") {
+        enableJsonMode(output);
+    }
+    else if (command.startsWith("move ")) {
+        parseAndMove(command, output);
     }
     else {
-        USB_SERIAL.println("Unknown command. Type 'help' for available commands.");
+        output.println("Unknown command: " + command);
+        output.println("Type 'status' for current state or try: scan, center, imu");
     }
 }
 
-void scanServos() {
-    USB_SERIAL.println("Scanning for servos...");
-    uint8_t foundServos[16];
-    memset(foundServos, 0, sizeof(foundServos));
+void showStatus(Stream& output) {
+    output.println("\n📊 PhoneWalker Status");
+    output.println("===================");
+    output.println("ESP32-S3 Controller: ✅ Online");
+    output.println("Servos Found: " + String(servoCount));
+    output.println("Walking: " + String(walkingActive ? "Active" : "Stopped"));
+    output.println("IMU Status: " + String(imuData.isConnected ? "✅ Connected" : "❌ Disconnected"));
+    output.printf("Free Heap: %d bytes\n", ESP.getFreeHeap());
+    output.println("");
 
-    int count = 0;
-    for (uint8_t id = 1; id <= 15; id++) {
-        USB_SERIAL.print("Checking ID ");
-        USB_SERIAL.print(id);
-        USB_SERIAL.print("... ");
+    output.println("📍 Servo Positions:");
+    output.println("ID | Name     | Position | Status | Last Update");
+    output.println("---|----------|----------|--------|------------");
 
-        if (servoController.ping(id)) {
-            foundServos[count++] = id;
-            USB_SERIAL.println("Found!");
-        } else {
-            USB_SERIAL.println("Not found");
-        }
-        delay(50);
-    }
+    for (int i = 0; i < servoCount; i++) {
+        String status = detectedServos[i].isResponding ? "✅ OK" : "❌ ERR";
+        unsigned long timeSince = millis() - detectedServos[i].lastUpdate;
 
-    if (count > 0) {
-        USB_SERIAL.print("\nFound ");
-        USB_SERIAL.print(count);
-        USB_SERIAL.print(" servos: ");
-        for (int i = 0; i < count; i++) {
-            USB_SERIAL.print(foundServos[i]);
-            if (i < count - 1) USB_SERIAL.print(", ");
-        }
-        USB_SERIAL.println();
-    } else {
-        USB_SERIAL.println("\nNo servos found!");
+        output.printf("%2d | %-8s | %8d | %6s | %6lums\n",
+                     detectedServos[i].id,
+                     detectedServos[i].name.c_str(),
+                     detectedServos[i].currentPosition,
+                     status.c_str(),
+                     timeSince);
     }
 }
 
-void pingServo(int id) {
-    USB_SERIAL.print("Pinging servo ID ");
-    USB_SERIAL.print(id);
-    USB_SERIAL.print("... ");
-
-    if (servoController.ping(id)) {
-        USB_SERIAL.println("Response OK!");
-    } else {
-        USB_SERIAL.println("No response");
-    }
-}
-
-void parsePositionCommand(String command) {
-    // Parse: pos <id> <position> [time] [speed]
-    int firstSpace = command.indexOf(' ', 4);
-    int secondSpace = command.indexOf(' ', firstSpace + 1);
-    int thirdSpace = command.indexOf(' ', secondSpace + 1);
-
-    if (firstSpace == -1 || secondSpace == -1) {
-        USB_SERIAL.println("Usage: pos <id> <position> [time] [speed]");
+void centerAllServos(Stream& output) {
+    if (servoCount == 0) {
+        output.println("❌ No servos found. Run 'scan' first.");
         return;
     }
 
-    int id = command.substring(4, firstSpace).toInt();
-    int position = command.substring(firstSpace + 1, secondSpace).toInt();
-    int time = 500;  // Default time
-    int speed = 0;   // Default speed
+    output.println("🎯 Centering all servos...");
 
-    if (thirdSpace != -1) {
-        time = command.substring(secondSpace + 1, thirdSpace).toInt();
-        speed = command.substring(thirdSpace + 1).toInt();
-    } else if (secondSpace != -1) {
-        String remaining = command.substring(secondSpace + 1);
-        if (remaining.length() > 0) {
-            time = remaining.toInt();
+    for (int i = 0; i < servoCount; i++) {
+        output.println("Centering " + detectedServos[i].name + " (ID: " + String(detectedServos[i].id) + ")");
+
+        servoController.setTorqueEnable(detectedServos[i].id, true);
+        delay(100);
+
+        servoController.setPosition(detectedServos[i].id, detectedServos[i].calibratedCenter, 1000);
+        delay(200);
+    }
+
+    output.println("✅ All servos centered!");
+}
+
+void startWalking(int steps, Stream& output) {
+    if (servoCount < 2) {
+        output.println("❌ Need at least 2 servos for walking demo");
+        return;
+    }
+
+    output.println("🚶 Starting walking simulation (" + String(steps) + " steps)");
+    walkingActive = true;
+
+    // Enable torque on available servos
+    for (int i = 0; i < min(4, servoCount); i++) {
+        servoController.setTorqueEnable(detectedServos[i].id, true);
+    }
+
+    // Start with centered position
+    centerAllServos(output);
+}
+
+void performWalkStep() {
+    static int walkPhase = 0;
+    static int currentStep = 0;
+
+    if (!walkingActive || servoCount < 2) return;
+
+    USB_SERIAL.println("🦶 Walk phase " + String(walkPhase) + ", step " + String(currentStep));
+
+    // Simple walking gait adapted for available servos
+    if (servoCount >= 4) {
+        // Full 4-servo walking
+        switch (walkPhase) {
+            case 0: // Lift front legs
+                servoController.setPosition(detectedServos[0].id, detectedServos[0].calibratedCenter - 200, 500);
+                servoController.setPosition(detectedServos[1].id, detectedServos[1].calibratedCenter - 200, 500);
+                break;
+            case 1: // Move front legs forward, back legs back
+                servoController.setPosition(detectedServos[0].id, detectedServos[0].calibratedCenter - 100, 500);
+                servoController.setPosition(detectedServos[1].id, detectedServos[1].calibratedCenter - 100, 500);
+                servoController.setPosition(detectedServos[2].id, detectedServos[2].calibratedCenter + 100, 500);
+                servoController.setPosition(detectedServos[3].id, detectedServos[3].calibratedCenter + 100, 500);
+                break;
+            case 2: // Lower front legs, lift back legs
+                servoController.setPosition(detectedServos[0].id, detectedServos[0].calibratedCenter, 500);
+                servoController.setPosition(detectedServos[1].id, detectedServos[1].calibratedCenter, 500);
+                servoController.setPosition(detectedServos[2].id, detectedServos[2].calibratedCenter - 200, 500);
+                servoController.setPosition(detectedServos[3].id, detectedServos[3].calibratedCenter - 200, 500);
+                break;
+            case 3: // Move back legs forward, front legs back
+                servoController.setPosition(detectedServos[0].id, detectedServos[0].calibratedCenter + 100, 500);
+                servoController.setPosition(detectedServos[1].id, detectedServos[1].calibratedCenter + 100, 500);
+                servoController.setPosition(detectedServos[2].id, detectedServos[2].calibratedCenter - 100, 500);
+                servoController.setPosition(detectedServos[3].id, detectedServos[3].calibratedCenter - 100, 500);
+                break;
+        }
+    } else {
+        // Simple alternating motion for 1-2 servos
+        int offset = (walkPhase % 2 == 0) ? -300 : 300;
+        for (int i = 0; i < servoCount; i++) {
+            int servoOffset = (i % 2 == 0) ? offset : -offset;
+            servoController.setPosition(detectedServos[i].id, detectedServos[i].calibratedCenter + servoOffset, 500);
         }
     }
 
-    USB_SERIAL.print("Moving servo ");
-    USB_SERIAL.print(id);
-    USB_SERIAL.print(" to position ");
-    USB_SERIAL.print(position);
-    USB_SERIAL.print(" (time: ");
-    USB_SERIAL.print(time);
-    USB_SERIAL.print("ms, speed: ");
-    USB_SERIAL.print(speed);
-    USB_SERIAL.println(")");
+    walkPhase = (walkPhase + 1) % 4;
+    if (walkPhase == 0) currentStep++;
 
-    if (servoController.setPosition(id, position, time, speed)) {
-        USB_SERIAL.println("Command sent successfully");
+    // Send real-time position data
+    sendPositionUpdate();
+}
+
+void stopWalking(Stream& output) {
+    walkingActive = false;
+    output.println("🛑 Walking stopped");
+    centerAllServos(output);
+}
+
+void sendPositionUpdate() {
+    // Send JSON position update
+    jsonDoc.clear();
+    jsonDoc["type"] = "position_update";
+    jsonDoc["timestamp"] = millis();
+
+    JsonArray servos = jsonDoc["servos"].to<JsonArray>();
+    for (int i = 0; i < servoCount; i++) {
+        JsonObject servo = servos.add<JsonObject>();
+        servo["id"] = detectedServos[i].id;
+        servo["name"] = detectedServos[i].name;
+        servo["position"] = detectedServos[i].currentPosition;
+        servo["responding"] = detectedServos[i].isResponding;
+    }
+
+    // Add IMU data
+    JsonObject imu = jsonDoc["imu"].to<JsonObject>();
+    imu["connected"] = imuData.isConnected;
+    imu["pitch"] = imuData.pitch;
+    imu["roll"] = imuData.roll;
+    imu["accel_x"] = imuData.accelX;
+    imu["accel_y"] = imuData.accelY;
+    imu["accel_z"] = imuData.accelZ;
+
+    String jsonString;
+    serializeJson(jsonDoc, jsonString);
+    USB_SERIAL.println("JSON: " + jsonString);
+}
+
+void showRealTimeMonitor(Stream& output) {
+    output.println("📡 Real-time servo monitoring (10 seconds)...");
+
+    unsigned long startTime = millis();
+    while (millis() - startTime < 10000) {
+        updateServoPositions();
+
+        output.print("[" + String(millis()) + "] Positions: ");
+        for (int i = 0; i < servoCount && i < 4; i++) {
+            output.print("S" + String(detectedServos[i].id) + ":" + String(detectedServos[i].currentPosition) + " ");
+        }
+        if (imuData.isConnected) {
+            output.printf("IMU: P=%.1f° R=%.1f°", imuData.pitch, imuData.roll);
+        }
+        output.println();
+
+        delay(500);
+    }
+}
+
+void enterCalibrationMode(Stream& output) {
+    output.println("🎛️ Entering calibration mode...");
+    output.println("Commands: 'cal <id> <position>' or 'done' to exit");
+    calibrationMode = true;
+    // Implementation for calibration commands...
+}
+
+void parseAndMove(String command, Stream& output) {
+    // Parse: move <id> <position> [time]
+    int firstSpace = command.indexOf(' ', 5);
+    int secondSpace = command.indexOf(' ', firstSpace + 1);
+
+    if (firstSpace == -1) {
+        output.println("Usage: move <id> <position> [time]");
+        return;
+    }
+
+    int id = command.substring(5, firstSpace).toInt();
+    int position = command.substring(firstSpace + 1, (secondSpace > 0) ? secondSpace : command.length()).toInt();
+    int time_ms = (secondSpace > 0) ? command.substring(secondSpace + 1).toInt() : 1000;
+
+    output.println("Moving servo " + String(id) + " to " + String(position) + " (time: " + String(time_ms) + "ms)");
+
+    servoController.setTorqueEnable(id, true);
+    servoController.setPosition(id, position, time_ms);
+}
+
+void enableJsonMode(Stream& output) {
+    output.println("📋 JSON API Mode enabled");
+    output.println("Live data streaming...");
+    sendPositionUpdate();
+}
+
+// IMU Functions
+void initIMU() {
+    Wire.beginTransmission(MPU6050_ADDR);
+    Wire.write(MPU6050_PWR_MGMT_1);
+    Wire.write(0);  // Wake up the MPU6050
+    if (Wire.endTransmission() == 0) {
+        imuData.isConnected = true;
+        USB_SERIAL.println("✅ GY-521 (MPU6050) initialized successfully");
     } else {
-        USB_SERIAL.println("Failed to send command");
+        imuData.isConnected = false;
+        USB_SERIAL.println("❌ GY-521 (MPU6050) not found on I2C");
     }
 }
 
-void getServoPosition(int id) {
-    USB_SERIAL.print("Reading position from servo ");
-    USB_SERIAL.print(id);
-    USB_SERIAL.print("... ");
+void readIMU() {
+    if (!imuData.isConnected) return;
 
-    int16_t position = servoController.getPosition(id);
-    if (position >= 0) {
-        USB_SERIAL.print("Position: ");
-        USB_SERIAL.println(position);
-    } else {
-        USB_SERIAL.println("Failed to read position");
+    // Read accelerometer and gyroscope data
+    Wire.beginTransmission(MPU6050_ADDR);
+    Wire.write(MPU6050_ACCEL_XOUT_H);
+    Wire.endTransmission(false);
+    Wire.requestFrom((uint8_t)MPU6050_ADDR, (uint8_t)14, (uint8_t)1);
+
+    if (Wire.available() >= 14) {
+        // Read accelerometer
+        int16_t accelX = (Wire.read() << 8) | Wire.read();
+        int16_t accelY = (Wire.read() << 8) | Wire.read();
+        int16_t accelZ = (Wire.read() << 8) | Wire.read();
+
+        // Read temperature
+        int16_t temperature = (Wire.read() << 8) | Wire.read();
+
+        // Read gyroscope
+        int16_t gyroX = (Wire.read() << 8) | Wire.read();
+        int16_t gyroY = (Wire.read() << 8) | Wire.read();
+        int16_t gyroZ = (Wire.read() << 8) | Wire.read();
+
+        // Convert to meaningful units
+        imuData.accelX = accelX / 16384.0;  // ±2g range
+        imuData.accelY = accelY / 16384.0;
+        imuData.accelZ = accelZ / 16384.0;
+
+        imuData.gyroX = gyroX / 131.0;  // ±250°/s range
+        imuData.gyroY = gyroY / 131.0;
+        imuData.gyroZ = gyroZ / 131.0;
+
+        imuData.temperature = temperature / 340.0 + 36.53;
+
+        // Calculate pitch and roll
+        imuData.roll = atan2(imuData.accelY, imuData.accelZ) * 180.0 / PI;
+        imuData.pitch = atan2(-imuData.accelX, sqrt(imuData.accelY * imuData.accelY + imuData.accelZ * imuData.accelZ)) * 180.0 / PI;
     }
 }
 
-void enableServo(int id, bool enable) {
-    USB_SERIAL.print(enable ? "Enabling" : "Disabling");
-    USB_SERIAL.print(" torque for servo ");
-    USB_SERIAL.print(id);
-    USB_SERIAL.print("... ");
-
-    if (servoController.setTorqueEnable(id, enable)) {
-        USB_SERIAL.println("Success");
-    } else {
-        USB_SERIAL.println("Failed");
-    }
-}
-
-void standUp() {
-    USB_SERIAL.println("Standing up...");
-    if (legs.standUp()) {
-        USB_SERIAL.println("Robot standing up!");
-    } else {
-        USB_SERIAL.println("Failed to stand up");
-    }
-}
-
-void sitDown() {
-    USB_SERIAL.println("Sitting down...");
-    if (legs.sitDown()) {
-        USB_SERIAL.println("Robot sitting down!");
-    } else {
-        USB_SERIAL.println("Failed to sit down");
-    }
-}
-
-void walkForward(int steps) {
-    USB_SERIAL.print("Walking forward ");
-    USB_SERIAL.print(steps);
-    USB_SERIAL.println(" steps...");
-
-    if (legs.walkForward(steps)) {
-        USB_SERIAL.println("Walk complete!");
-    } else {
-        USB_SERIAL.println("Walk failed");
-    }
-}
-
-void stopMovement() {
-    USB_SERIAL.println("Stopping all movement...");
-    if (legs.stop()) {
-        USB_SERIAL.println("All servos stopped");
-    } else {
-        USB_SERIAL.println("Failed to stop");
-    }
-}
-
-void testServos() {
-    USB_SERIAL.println("Testing servo movements...");
-
-    // Test each of the main 4 servos
-    uint8_t testServos[] = {FRONT_LEFT_ID, FRONT_RIGHT_ID, BACK_LEFT_ID, BACK_RIGHT_ID};
-    String servoNames[] = {"Front Left", "Front Right", "Back Left", "Back Right"};
-
-    for (int i = 0; i < 4; i++) {
-        USB_SERIAL.print("Testing ");
-        USB_SERIAL.print(servoNames[i]);
-        USB_SERIAL.print(" (ID ");
-        USB_SERIAL.print(testServos[i]);
-        USB_SERIAL.println(")");
-
-        // Enable servo
-        servoController.setTorqueEnable(testServos[i], true);
-        delay(100);
-
-        // Move to center
-        servoController.setPosition(testServos[i], 2048, 1000);
-        delay(1200);
-
-        // Move up
-        servoController.setPosition(testServos[i], 1848, 500);  // +200
-        delay(600);
-
-        // Move down
-        servoController.setPosition(testServos[i], 2248, 500);  // -200
-        delay(600);
-
-        // Return to center
-        servoController.setPosition(testServos[i], 2048, 500);
-        delay(600);
-
-        USB_SERIAL.println("  Test complete");
+void showIMUData(Stream& output) {
+    if (!imuData.isConnected) {
+        output.println("❌ IMU not connected");
+        return;
     }
 
-    USB_SERIAL.println("All servo tests complete!");
+    output.println("\n🧭 IMU Data (GY-521 MPU6050)");
+    output.println("============================");
+    output.printf("Accelerometer (g): X=%.3f, Y=%.3f, Z=%.3f\n",
+                  imuData.accelX, imuData.accelY, imuData.accelZ);
+    output.printf("Gyroscope (°/s):   X=%.2f, Y=%.2f, Z=%.2f\n",
+                  imuData.gyroX, imuData.gyroY, imuData.gyroZ);
+    output.printf("Orientation:       Pitch=%.1f°, Roll=%.1f°\n",
+                  imuData.pitch, imuData.roll);
+    output.printf("Temperature:       %.1f°C\n", imuData.temperature);
 }
 
-void showServoStatus() {
-    USB_SERIAL.println("Servo Status:");
-    USB_SERIAL.println("ID | Position | Speed | Load | Voltage | Temp | Moving");
-    USB_SERIAL.println("---|----------|-------|------|---------|------|-------");
-
-    uint8_t testServos[] = {FRONT_LEFT_ID, FRONT_RIGHT_ID, BACK_LEFT_ID, BACK_RIGHT_ID};
-
-    for (int i = 0; i < 4; i++) {
-        uint8_t id = testServos[i];
-        int16_t pos = servoController.getPosition(id);
-        int16_t speed = servoController.getSpeed(id);
-        int16_t load = servoController.getLoad(id);
-        uint8_t voltage = servoController.getVoltage(id);
-        uint8_t temp = servoController.getTemperature(id);
-        bool moving = servoController.isMoving(id);
-
-        USB_SERIAL.print(" ");
-        USB_SERIAL.print(id);
-        USB_SERIAL.print(" | ");
-        USB_SERIAL.print(pos >= 0 ? String(pos) : "ERR ");
-        USB_SERIAL.print("    | ");
-        USB_SERIAL.print(speed >= 0 ? String(speed) : "ERR");
-        USB_SERIAL.print("   | ");
-        USB_SERIAL.print(load >= 0 ? String(load) : "ERR");
-        USB_SERIAL.print("  | ");
-        USB_SERIAL.print(voltage > 0 ? String(voltage/10.0, 1) + "V" : "ERR ");
-        USB_SERIAL.print("   | ");
-        USB_SERIAL.print(temp > 0 ? String(temp) + "°C" : "ERR");
-        USB_SERIAL.print(" | ");
-        USB_SERIAL.println(moving ? "YES" : "NO ");
-
-        delay(50);  // Small delay between queries
+void showBalanceStatus(Stream& output) {
+    if (!imuData.isConnected) {
+        output.println("❌ IMU not connected - cannot check balance");
+        return;
     }
-}
 
-void showHelp() {
-    USB_SERIAL.println("\nPhoneWalker Servo Controller Commands:");
-    USB_SERIAL.println("=====================================");
-    USB_SERIAL.println("Basic servo control:");
-    USB_SERIAL.println("  scan                     - Scan for connected servos");
-    USB_SERIAL.println("  ping <id>                - Test communication with servo");
-    USB_SERIAL.println("  pos <id> <pos> [t] [s]   - Set position (0-4095), time (ms), speed");
-    USB_SERIAL.println("  get <id>                 - Get current servo position");
-    USB_SERIAL.println("  enable <id>              - Enable servo torque");
-    USB_SERIAL.println("  disable <id>             - Disable servo torque");
-    USB_SERIAL.println("");
-    USB_SERIAL.println("Walking robot control:");
-    USB_SERIAL.println("  standup                  - Make robot stand up");
-    USB_SERIAL.println("  sitdown                  - Make robot sit down");
-    USB_SERIAL.println("  walk <steps>             - Walk forward N steps");
-    USB_SERIAL.println("  stop                     - Stop all movement");
-    USB_SERIAL.println("");
-    USB_SERIAL.println("Testing and diagnostics:");
-    USB_SERIAL.println("  test                     - Test all 4 leg servos");
-    USB_SERIAL.println("  status                   - Show servo status");
-    USB_SERIAL.println("  help                     - Show this help");
-    USB_SERIAL.println("");
-    USB_SERIAL.println("Examples:");
-    USB_SERIAL.println("  pos 1 2048              - Move servo 1 to center position");
-    USB_SERIAL.println("  pos 2 1500 1000 200     - Move servo 2 to 1500 in 1s at speed 200");
-    USB_SERIAL.println("  walk 5                   - Walk forward 5 steps");
+    output.println("\n⚖️ Balance Status");
+    output.println("================");
+
+    // Determine balance state
+    bool isUpright = (abs(imuData.pitch) < 45 && abs(imuData.roll) < 45);
+    bool isStable = (abs(imuData.gyroX) < 50 && abs(imuData.gyroY) < 50 && abs(imuData.gyroZ) < 50);
+
+    output.printf("Upright:    %s (Pitch: %.1f°, Roll: %.1f°)\n",
+                  isUpright ? "✅ YES" : "❌ NO", imuData.pitch, imuData.roll);
+    output.printf("Stable:     %s (GyroX: %.1f°/s, GyroY: %.1f°/s)\n",
+                  isStable ? "✅ YES" : "❌ NO", imuData.gyroX, imuData.gyroY);
+
+    if (!isUpright) {
+        output.println("⚠️ WARNING: Robot may have fallen!");
+    }
+    if (!isStable) {
+        output.println("⚠️ WARNING: Robot is moving/shaking!");
+    }
+    if (isUpright && isStable) {
+        output.println("✅ Robot is balanced and stable");
+    }
 }
