@@ -204,4 +204,5 @@
  .pio/libdeps/esp32-s3-devkitc-1/ArduinoJson/src/ArduinoJson/Configuration.hpp \
  /home/andrii/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src/Wire.h \
  /home/andrii/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal.h \
+ .pio/libdeps/esp32-s3-devkitc-1/Adafruit\ NeoPixel/Adafruit_NeoPixel.h \
  lib/STS3032/STS3032.h
