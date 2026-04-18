@@ -58,7 +58,7 @@ async def run_single(args: argparse.Namespace) -> int:
                 print(f"→ ESTOP  brainstem: {resp}")
                 continue
 
-            raw = llm.infer(line)
+            raw = await loop.run_in_executor(None, llm.infer, line)
             try:
                 cmd = val.validate(raw)
             except V.ValidationError as e:
@@ -116,7 +116,8 @@ async def run_agent(args: argparse.Namespace) -> int:
             # turn; episodic memory lives in SQLite via log_episode.
             history.append({"role": "user", "content": line})
             history.append({"role": "assistant", "content": turn.final_message})
-            history = history[-12:]
+            if len(history) > 12:
+                history = history[-(len(history) // 2 * 2):]  # keep even count
     finally:
         await bs.stop()
         memory.close()

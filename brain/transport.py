@@ -32,6 +32,8 @@ log = logging.getLogger("brain.transport")
 class Brainstem:
     async def start(self) -> None: ...
     async def send(self, command: dict[str, Any]) -> list[dict[str, Any]]: ...
+    async def send_raw(self, wire_msg: dict[str, Any]) -> list[dict[str, Any]]:
+        raise NotImplementedError(f"{type(self).__name__} does not support send_raw")
     async def stop(self) -> None: ...
 
 
@@ -66,8 +68,10 @@ class SubprocessBrainstem(Brainstem):
             stderr=asyncio.subprocess.PIPE,
             env=env,
         )
-        # Drain the "ready" banner so the first send→receive is aligned.
-        await self._read_until({"t": "ready"})
+        try:
+            await asyncio.wait_for(self._read_until({"t": "ready"}), timeout=15.0)
+        except asyncio.TimeoutError:
+            raise RuntimeError("sim did not send ready within 15s — crashed?")
 
     async def send(self, command: dict[str, Any]) -> list[dict[str, Any]]:
         """Send one brain command. Returns the firmware responses (usually 1)."""
@@ -85,6 +89,31 @@ class SubprocessBrainstem(Brainstem):
                 responses.append(resp)
                 self.received.append(resp)
         return responses
+
+    async def send_raw(self, wire_msg: dict[str, Any]) -> list[dict[str, Any]]:
+        """Send a raw wire command, accepting ack/err/status responses."""
+        assert self._proc is not None and self._proc.stdin is not None
+        line = json.dumps(wire_msg) + "\n"
+        self._proc.stdin.write(line.encode())
+        await self._proc.stdin.drain()
+        resp = await self._read_one_response(("ack", "err", "status"))
+        return [resp] if resp is not None else []
+
+    async def _read_one_response(
+        self, accept: tuple[str, ...] = ("ack", "err"),
+    ) -> dict[str, Any] | None:
+        assert self._proc is not None and self._proc.stdout is not None
+        for _ in range(50):
+            line = await self._proc.stdout.readline()
+            if not line:
+                return None
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if msg.get("t") in accept:
+                return msg
+        return None
 
     async def stop(self) -> None:
         if self._proc is None:
@@ -165,16 +194,49 @@ class TcpBrainstem(Brainstem):
             line = json.dumps(msg) + "\n"
             self._writer.write(line.encode())
             await self._writer.drain()
-            resp_line = await self._reader.readline()
-            if not resp_line:
-                break
-            try:
-                resp = json.loads(resp_line)
+            resp = await self._read_one_ack()
+            if resp is not None:
                 responses.append(resp)
                 self.received.append(resp)
-            except json.JSONDecodeError:
-                log.warning("bad response: %r", resp_line)
         return responses
+
+    async def _read_one_ack(self) -> dict[str, Any] | None:
+        """Read lines until we see an ack/err, skipping telemetry."""
+        assert self._reader is not None
+        for _ in range(50):
+            resp_line = await self._reader.readline()
+            if not resp_line:
+                return None
+            try:
+                msg = json.loads(resp_line)
+            except json.JSONDecodeError:
+                continue
+            if msg.get("t") in ("ack", "err"):
+                return msg
+        return None
+
+    async def send_raw(self, wire_msg: dict[str, Any]) -> list[dict[str, Any]]:
+        assert self._writer is not None and self._reader is not None
+        self._writer.write((json.dumps(wire_msg) + "\n").encode())
+        await self._writer.drain()
+        resp = await self._read_one_response(("ack", "err", "status"))
+        return [resp] if resp is not None else []
+
+    async def _read_one_response(
+        self, accept: tuple[str, ...] = ("ack", "err"),
+    ) -> dict[str, Any] | None:
+        assert self._reader is not None
+        for _ in range(50):
+            resp_line = await self._reader.readline()
+            if not resp_line:
+                return None
+            try:
+                msg = json.loads(resp_line)
+            except json.JSONDecodeError:
+                continue
+            if msg.get("t") in accept:
+                return msg
+        return None
 
     async def stop(self) -> None:
         if self._writer is not None:

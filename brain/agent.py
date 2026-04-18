@@ -160,8 +160,10 @@ class Agent:
                 "Content-Type": "application/json",
             },
         )
-        loop = asyncio.get_event_loop()
-        payload = await loop.run_in_executor(None, _http_json, req, self.config.timeout_s)
+        loop = asyncio.get_running_loop()
+        payload = await loop.run_in_executor(
+            None, _http_json_with_retry, req, self.config.timeout_s
+        )
         return payload["choices"][0]["message"]
 
     # ---------------------------------------------------------- dispatch
@@ -316,10 +318,33 @@ def _to_openai_tool(t: ToolSpec) -> dict[str, Any]:
     }
 
 
-def _http_json(req: urllib.request.Request, timeout: float) -> dict[str, Any]:
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", errors="replace")[:600]
-        raise RuntimeError(f"agent http {e.code}: {detail}") from e
+def _http_json_with_retry(
+    req: urllib.request.Request,
+    timeout: float,
+    max_retries: int = 3,
+) -> dict[str, Any]:
+    import time as _time
+
+    for attempt in range(max_retries):
+        try:
+            fresh = urllib.request.Request(
+                req.full_url, data=req.data, headers=dict(req.headers), method=req.method
+            )
+            with urllib.request.urlopen(fresh, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")[:600]
+            if e.code in (429, 502, 503, 529) and attempt < max_retries - 1:
+                wait = min(2 ** attempt, 8)
+                log.warning("http %d, retry %d/%d in %ds", e.code, attempt + 1, max_retries, wait)
+                _time.sleep(wait)
+                continue
+            raise RuntimeError(f"agent http {e.code}: {detail}") from e
+        except urllib.error.URLError as e:
+            if attempt < max_retries - 1:
+                wait = min(2 ** attempt, 8)
+                log.warning("url error: %s, retry %d/%d in %ds", e.reason, attempt + 1, max_retries, wait)
+                _time.sleep(wait)
+                continue
+            raise RuntimeError(f"agent network error: {e.reason}") from e
+    raise RuntimeError("unreachable")

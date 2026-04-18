@@ -118,12 +118,10 @@ class RobotSkills:
 
     async def status(self) -> SkillResult:
         """Read robot telemetry (positions, voltage, temperature, safety state)."""
-        # The firmware exposes a 'status' wire command directly; bypass wire
-        # translator and send raw. Works for SubprocessBrainstem and TcpBrainstem.
         try:
-            # Reuse any transport-specific request helper if available;
-            # otherwise fall back to sending a raw wire command.
-            responses = await _raw_wire_send(self.brainstem, {"c": "status"})
+            responses = await self.brainstem.send_raw({"c": "status"})
+        except NotImplementedError:
+            return SkillResult(False, error=f"{type(self.brainstem).__name__} does not support status")
         except Exception as e:
             return SkillResult(False, error=f"status request failed: {e}")
         for r in responses:
@@ -177,50 +175,3 @@ class RobotSkills:
 
 def _episode_to_dict(e: Episode) -> dict[str, Any]:
     return {"id": e.id, "ts_ms": e.ts_ms, "summary": e.summary, "tags": e.tags}
-
-
-async def _raw_wire_send(brainstem: Brainstem, wire_msg: dict[str, Any]) -> list[dict[str, Any]]:
-    """Bypass the brain schema and send a raw firmware wire command.
-
-    Used only by introspection skills like ``status`` that aren't in the
-    brain behavior vocabulary. Other skills must go through the validator.
-    """
-    # Lazy import to avoid a hard dependency if other transports are plugged in.
-    from brain.transport import SubprocessBrainstem, TcpBrainstem
-
-    if isinstance(brainstem, SubprocessBrainstem):
-        assert brainstem._proc is not None and brainstem._proc.stdin is not None
-        import json as _json
-
-        line = (_json.dumps(wire_msg) + "\n").encode()
-        brainstem._proc.stdin.write(line)
-        await brainstem._proc.stdin.drain()
-        responses = []
-        for _ in range(50):
-            raw_line = await brainstem._proc.stdout.readline()  # type: ignore[union-attr]
-            if not raw_line:
-                break
-            try:
-                msg = _json.loads(raw_line)
-            except _json.JSONDecodeError:
-                continue
-            if msg.get("t") in ("ack", "err", "status"):
-                responses.append(msg)
-                break
-        return responses
-
-    if isinstance(brainstem, TcpBrainstem):
-        assert brainstem._writer is not None and brainstem._reader is not None
-        import json as _json
-
-        brainstem._writer.write((_json.dumps(wire_msg) + "\n").encode())
-        await brainstem._writer.drain()
-        resp_line = await brainstem._reader.readline()
-        if not resp_line:
-            return []
-        try:
-            return [_json.loads(resp_line)]
-        except _json.JSONDecodeError:
-            return []
-
-    raise RuntimeError(f"raw wire not supported on transport {type(brainstem).__name__}")

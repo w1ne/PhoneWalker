@@ -34,7 +34,7 @@ class Validator:
     allowed_behaviors: frozenset[str] = field(
         default_factory=lambda: frozenset(v.BEHAVIORS)
     )
-    clock: Any = field(default=lambda: int(time.time() * 1000))
+    clock: Any = field(default=lambda: int(time.monotonic() * 1000))
     _last_seq: int = 0
     # Epoch-ms at which the current behavior is expected to finish. Commands
     # that arrive before this are rejected unless emergency.
