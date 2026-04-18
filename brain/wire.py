@@ -3,9 +3,15 @@
 Brain-side schema (LLM-friendly):
     {"v":1,"behavior":"bow_front","params":{"speed":1800},"seq":1,"ts_ms":...}
 
-Firmware wire protocol (firmware/src/CommandProcessor.h):
+Firmware wire protocol (verified live on the ESP32 — every verb returns
+``{"t":"ack","c":"…","ok":true}`` or ``{"t":"err","msg":"…"}``; the
+firmware source is a pre-refactor monolith under ``firmware/src/`` and
+does not yet have a `CommandProcessor.h`, but the running image speaks
+this schema):
     {"c":"pose","n":"bow_front","d":1800}
     {"c":"walk","on":true,"stride":150,"step":400}
+    {"c":"jump"}
+    {"c":"stop"}
     {"c":"estop"}
 
 The translator is explicit about what it drops. Every lost field is recorded
