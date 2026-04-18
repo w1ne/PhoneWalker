@@ -1,0 +1,8 @@
+root ::= "{" ws "\"v\":" ws "1" ws "," ws "\"behavior\":" ws behavior ws "," ws "\"params\":" ws params ws ("," ws "\"reason\":" ws string ws)? "}"
+behavior ::= "\"neutral\"" | "\"bow_front\"" | "\"lean_left\"" | "\"lean_right\"" | "\"stretch_diagonal1\"" | "\"stretch_diagonal2\"" | "\"twist_front_left\"" | "\"twist_front_right\"" | "\"walk\"" | "\"jump\"" | "\"stop\"" | "\"estop\""
+transition ::= "\"instant\"" | "\"linear\"" | "\"smooth\"" | "\"bounce\""
+params ::= "{" ws (param (ws "," ws param)*)? ws "}"
+param ::= "\"speed\":" ws integer | "\"duration_ms\":" ws integer | "\"hold_ms\":" ws integer | "\"stride\":" ws integer | "\"step_ms\":" ws integer | "\"transition\":" ws transition
+string ::= "\"" ([^"\\] | "\\" ["\\/bfnrt])* "\""
+integer ::= "-"? ("0" | [1-9] [0-9]*)
+ws ::= [ \t\n]*

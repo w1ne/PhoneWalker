@@ -56,3 +56,8 @@ firmware/src/*.ino.cpp
 # Build artifacts
 *.dblite
 .sconsign*
+
+# PhoneWalker brain
+models/
+.phonewalker/
+brain/pytest.ini

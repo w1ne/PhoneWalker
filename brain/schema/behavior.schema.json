@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PhoneWalker Behavior Command",
+  "type": "object",
+  "required": [
+    "v",
+    "behavior"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "behavior": {
+      "enum": [
+        "neutral",
+        "bow_front",
+        "lean_left",
+        "lean_right",
+        "stretch_diagonal1",
+        "stretch_diagonal2",
+        "twist_front_left",
+        "twist_front_right",
+        "walk",
+        "jump",
+        "stop",
+        "estop"
+      ]
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "speed": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 3400
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 5000
+        },
+        "hold_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5000
+        },
+        "stride": {
+          "type": "integer",
+          "minimum": 50,
+          "maximum": 400
+        },
+        "step_ms": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 1000
+        },
+        "transition": {
+          "enum": [
+            "instant",
+            "linear",
+            "smooth",
+            "bounce"
+          ]
+        }
+      }
+    },
+    "reason": {
+      "type": "string",
+      "maxLength": 120
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ts_ms": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}
