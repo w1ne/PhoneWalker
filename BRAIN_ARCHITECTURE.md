@@ -10,8 +10,17 @@ Companion docs:
   Its big-picture shape (brain/brainstem split, two-tier loop, emergency
   priority) still holds; specifics below supersede it where they conflict.
 - `CHOREOGRAPHY_GUIDE.md` — the pose vocabulary the brain speaks to.
-- `firmware/src/CommandProcessor.h` — **the actual wire protocol**. This
-  file is the ground truth; everything else aligns to it.
+- The wire protocol itself is the ground truth and is enforced live by
+  the ESP32 — see `brain/wire.py` for the canonical schema and the
+  verified ack/err envelope. The firmware source files named elsewhere
+  in this doc (`CommandProcessor.h`, `MotionController.h`,
+  `GaitController.h`) are the planned modular layout; the currently
+  committed source under `firmware/src/` is a pre-refactor monolith
+  (`main.cpp`, `command_handler.cpp/h`, `servo_manager.cpp/h`). The
+  firmware image running on the bench ESP32 speaks the new protocol
+  (verified: pose / walk / jump / stop / estop all return
+  `{"t":"ack","c":"…","ok":true}`); that source will land here when the
+  refactor is committed.
 
 ---
 
