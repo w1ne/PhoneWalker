@@ -122,10 +122,11 @@ class Memory:
 
     def search_episodes(self, query: str, n: int = 10) -> list[Episode]:
         """Naive substring search — sufficient for small histories."""
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         rows = self._conn.execute(
             "SELECT id, ts_ms, summary, tags FROM episodes "
-            "WHERE summary LIKE ? ORDER BY id DESC LIMIT ?",
-            (f"%{query}%", n),
+            "WHERE summary LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?",
+            (f"%{escaped}%", n),
         ).fetchall()
         return [
             Episode(r["id"], r["ts_ms"], r["summary"], json.loads(r["tags"]))

@@ -141,11 +141,15 @@ class Validator:
 def is_emergency_transcript(text: str) -> bool:
     """Text-layer bypass: phrases that go straight to estop.
 
-    Only used as a shortcut before invoking the LLM. The ESP32 has its own
-    watchdog and safety system — this is not a substitute.
+    Only fires on short utterances (≤4 words) that contain an emergency
+    keyword. "kill" in "I killed it at the dance" won't trigger; "freeze"
+    alone will. The ESP32 has its own watchdog — this is convenience, not
+    authority.
     """
-    words = set(re.findall(r"[a-z]+", text.lower()))
-    return bool(words & set(v.EMERGENCY_TRANSCRIPTS))
+    words = re.findall(r"[a-z]+", text.lower())
+    if len(words) > 4:
+        return False
+    return bool(set(words) & set(v.EMERGENCY_TRANSCRIPTS))
 
 
 def emergency_stop_command() -> dict[str, Any]:

@@ -16,6 +16,7 @@ what the firmware's serial bridge speaks today, which is the honest target.
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import logging
 import os
@@ -23,6 +24,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+MAX_RECEIVED_LOG = 200
 
 from brain.wire import WireWarning, translate
 
@@ -53,7 +56,7 @@ class SubprocessBrainstem(Brainstem):
     python: str = sys.executable
     gui: bool = False
     _proc: asyncio.subprocess.Process | None = None
-    received: list[dict[str, Any]] = field(default_factory=list)
+    received: collections.deque = field(default_factory=lambda: collections.deque(maxlen=MAX_RECEIVED_LOG))
 
     async def start(self) -> None:
         args = [self.python, "-u", str(self.sim_path)]
@@ -178,7 +181,7 @@ class TcpBrainstem(Brainstem):
     port: int = 8765
     _reader: asyncio.StreamReader | None = None
     _writer: asyncio.StreamWriter | None = None
-    received: list[dict[str, Any]] = field(default_factory=list)
+    received: collections.deque = field(default_factory=lambda: collections.deque(maxlen=MAX_RECEIVED_LOG))
 
     async def start(self) -> None:
         self._reader, self._writer = await asyncio.open_connection(self.host, self.port)
@@ -251,7 +254,7 @@ class TcpBrainstem(Brainstem):
 
 @dataclass
 class StdoutBrainstem(Brainstem):
-    received: list[dict[str, Any]] = field(default_factory=list)
+    received: collections.deque = field(default_factory=lambda: collections.deque(maxlen=MAX_RECEIVED_LOG))
 
     async def start(self) -> None: ...
     async def stop(self) -> None: ...
