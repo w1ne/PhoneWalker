@@ -5,22 +5,24 @@ Real ESP32 hardware loop, Android port, and LLM integration are not yet
 wired. See `PHONE_BRAIN_RESEARCH.md` for the model-and-runtime survey that
 motivated the design choices here.
 
-Companion docs:
-- `BRAIN_BRAINSTEM_ARCHITECTURE.md` — the original aspirational design doc.
-  Its big-picture shape (brain/brainstem split, two-tier loop, emergency
-  priority) still holds; specifics below supersede it where they conflict.
-- `CHOREOGRAPHY_GUIDE.md` — the pose vocabulary the brain speaks to.
-- The wire protocol itself is the ground truth and is enforced live by
-  the ESP32 — see `brain/wire.py` for the canonical schema and the
-  verified ack/err envelope. The firmware source files named elsewhere
-  in this doc (`CommandProcessor.h`, `MotionController.h`,
-  `GaitController.h`) are the planned modular layout; the currently
-  committed source under `firmware/src/` is a pre-refactor monolith
-  (`main.cpp`, `command_handler.cpp/h`, `servo_manager.cpp/h`). The
-  firmware image running on the bench ESP32 speaks the new protocol
-  (verified: pose / walk / jump / stop / estop all return
-  `{"t":"ack","c":"…","ok":true}`); that source will land here when the
-  refactor is committed.
+Companion files (actually present in the repo):
+- `CONCEPT.md` — the original product vision.
+- `PHONE_BRAIN_RESEARCH.md`, `PHONE_BRAIN_MODELS_2026_APR.md`,
+  `ROBOTICS_RESEARCH_2026.md` — the model/runtime surveys.
+- `brain/wire.py` — **the canonical wire protocol.** The ESP32 enforces
+  this schema live (verified on hardware: pose / walk / jump / stop /
+  estop all return `{"t":"ack","c":"…","ok":true}`).
+- `brain/schema/vocabulary.py` — the pose and behavior vocabulary.
+
+Two names appear below that refer to *planned* files that have not
+landed yet: `BRAIN_BRAINSTEM_ARCHITECTURE.md`, `CHOREOGRAPHY_GUIDE.md`,
+and the modular firmware split (`CommandProcessor.h`,
+`MotionController.h`, `GaitController.h`). The currently committed
+firmware under `firmware/src/` is a pre-refactor monolith
+(`main.cpp` + `command_handler.cpp/h` + `servo_manager.cpp/h`) whose
+protocol does **not** match the wire schema in `brain/wire.py`. The
+firmware image flashed on the bench ESP32 is a newer build that does
+match; it will land here when the refactor is committed.
 
 ---
 
